@@ -1,12 +1,12 @@
-FROM alpine:3.8 as protoc_builder
+FROM golang:1.12-alpine as protoc_builder
 RUN apk add --no-cache build-base curl automake autoconf libtool git zlib-dev
 
-ENV GRPC_VERSION=1.16.0 \
-        GRPC_JAVA_VERSION=1.16.1 \
-        GRPC_WEB_VERSION=1.0.0 \
-        PROTOBUF_VERSION=3.6.1 \
-        PROTOBUF_C_VERSION=1.3.1 \
-        PROTOC_GEN_DOC_VERSION=1.1.0 \
+ENV GRPC_VERSION=1.22.0 \
+        GRPC_JAVA_VERSION=1.23.0 \
+        GRPC_WEB_VERSION=1.0.2 \
+        PROTOBUF_VERSION=3.9.1 \
+        PROTOBUF_C_VERSION=1.3.2 \
+        PROTOC_GEN_DOC_VERSION=1.3.0 \
         OUTDIR=/out
 RUN mkdir -p /protobuf && \
         curl -L https://github.com/google/protobuf/archive/v${PROTOBUF_VERSION}.tar.gz | tar xvz --strip-components=1 -C /protobuf
@@ -23,7 +23,7 @@ RUN cd /protobuf && \
         autoreconf -f -i -Wall,no-obsolete && \
         ./configure --prefix=/usr --enable-static=no && \
         make -j2 && make install
-RUN cd grpc && \
+RUN cd /grpc && \
         make -j2 plugins
 RUN cd /grpc-java/compiler/src/java_plugin/cpp && \
         g++ \
@@ -66,10 +66,12 @@ RUN go get -u -v -ldflags '-w -s' \
         github.com/johanbrandhorst/protobuf/protoc-gen-gopherjs \
         github.com/ckaznocha/protoc-gen-lint \
         github.com/mwitkow/go-proto-validators/protoc-gen-govalidators \
-        github.com/lyft/protoc-gen-validate \
-        moul.io/protoc-gen-gotemplate \
-        github.com/micro/protoc-gen-micro \
-        && (cd ${GOPATH}/src/github.com/lyft/protoc-gen-validate && make build) \
+        github.com/envoyproxy/protoc-gen-validate \
+        moul.io/protoc-gen-gotemplate
+RUN go get -u -v -ldflags '-w -s' \
+        github.com/micro/protoc-gen-micro
+
+RUN (cd ${GOPATH}/src/github.com/envoyproxy/protoc-gen-validate && make build) \
         && install -c ${GOPATH}/bin/protoc-gen* ${OUTDIR}/usr/bin/
 
 RUN mkdir -p ${GOPATH}/src/github.com/pseudomuto/protoc-gen-doc && \
@@ -77,7 +79,6 @@ RUN mkdir -p ${GOPATH}/src/github.com/pseudomuto/protoc-gen-doc && \
 RUN cd ${GOPATH}/src/github.com/pseudomuto/protoc-gen-doc && \
         make build && \
         install -c ${GOPATH}/src/github.com/pseudomuto/protoc-gen-doc/protoc-gen-doc ${OUTDIR}/usr/bin/
-
 
 FROM ubuntu:16.04 as swift_builder
 RUN apt-get update && \
@@ -137,16 +138,9 @@ RUN mkdir -p ${OUTDIR}/usr/bin && \
         install -c /rust-protobuf/target/x86_64-unknown-linux-musl/release/protoc-gen-rust ${OUTDIR}/usr/bin/
 
 
-FROM znly/upx as packer
-COPY --from=protoc_builder /out/ /out/
-RUN upx --lzma \
-        /out/usr/bin/protoc \
-        /out/usr/bin/grpc_* \
-        /out/usr/bin/protoc-gen-*
-
 FROM alpine:3.7
-RUN apk add --no-cache libstdc++
-COPY --from=packer /out/ /
+RUN apk add libstdc++ bash
+COPY --from=protoc_builder /out/ /
 COPY --from=rust_builder /out/ /
 COPY --from=swift_builder /protoc-gen-swift /protoc-gen-swift
 RUN for p in protoc-gen-swift protoc-gen-swiftgrpc; do \
@@ -174,5 +168,4 @@ RUN apk add --no-cache curl && \
         curl -L -o /protobuf/github.com/lyft/protoc-gen-validate/validate/validate.proto https://raw.githubusercontent.com/lyft/protoc-gen-validate/master/validate/validate.proto && \
         apk del curl && \
         chmod a+x /usr/bin/protoc
-
 ENTRYPOINT ["/usr/bin/protoc", "-I/protobuf"]
